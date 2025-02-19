@@ -1,0 +1,64 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.project
+.pydevproject
+.settings/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 日志文件
+*.log
+
+# 本地配置文件（可以把包含敏感信息的配置文件放在这里）
+config.ini
+.env
+
+# 数据文件
+*.csv
+*.xlsx
+*.xls
+*.db
+*.sqlite3
+
+# 图表输出
+*.png
+*.jpg
+*.pdf
+
+# 新增配置文件
+config.py 
