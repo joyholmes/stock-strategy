@@ -1,105 +1,94 @@
 import tushare as ts
 import pandas as pd
 import numpy as np
-from datetime import datetime
 from config import *
+import talib
 
 class MACDStrategy:
-    def __init__(self, initial_capital=INITIAL_CAPITAL, position_size=POSITION_SIZE):
-        # 初始资金
-        self.initial_capital = initial_capital
-        # 仓位比例
-        self.position_size = position_size
-        # 获取tushare token
-        ts.set_token(TUSHARE_TOKEN)
-        self.pro = ts.pro_api()
+    def __init__(self):
+        # 初始化tushare
+        self.pro = ts.pro_api(TUSHARE_TOKEN)
+        self.capital = INITIAL_CAPITAL
+        self.position = 0
+        self.trades = []
         
-    def get_data(self, start_date, end_date):
-        """获取沪深300历史数据"""
-        try:
-            df = self.pro.index_daily(
-                ts_code='000300.SH',
-                start_date=start_date,
-                end_date=end_date
-            )
-            # 按日期正序排列
-            df = df.sort_values('trade_date')
-            return df
-        except Exception as e:
-            print(f"获取数据失败: {e}")
-            return None
+    def get_data(self):
+        # 获取沪深300数据
+        df = self.pro.index_daily(
+            ts_code=SYMBOL,
+            start_date=START_DATE.replace('-', ''),
+            end_date=END_DATE.replace('-', '')
+        )
+        
+        # 按时间正序排列
+        df = df.sort_values('trade_date')
+        
+        # 计算MACD指标
+        df['macd'], df['macd_signal'], df['macd_hist'] = talib.MACD(
+            df['close'],
+            fastperiod=MACD_FAST,
+            slowperiod=MACD_SLOW,
+            signalperiod=MACD_SIGNAL
+        )
+        
+        return df
     
-    def calculate_macd(self, df, fast=MACD_FAST, slow=MACD_SLOW, signal=MACD_SIGNAL):
-        """计算MACD指标"""
-        # 计算快线和慢线的指数移动平均
-        exp1 = df['close'].ewm(span=fast, adjust=False).mean()
-        exp2 = df['close'].ewm(span=slow, adjust=False).mean()
+    def run_backtest(self):
+        df = self.get_data()
+        position = 0  # 0表示空仓，1表示持仓
         
-        # 计算MACD线
-        macd = exp1 - exp2
-        # 计算信号线
-        signal_line = macd.ewm(span=signal, adjust=False).mean()
-        # 计算MACD柱
-        histogram = macd - signal_line
-        
-        return macd, signal_line, histogram
-
-    def backtest(self, start_date, end_date):
-        """执行回测"""
-        # 获取数据
-        df = self.get_data(start_date, end_date)
-        
-        # 计算MACD
-        macd, signal, hist = self.calculate_macd(df)
-        
-        # 添加指标到数据框
-        df['macd'] = macd
-        df['signal'] = signal
-        df['hist'] = hist
-        
-        # 初始化结果
-        positions = []  # 持仓情况
-        capital = self.initial_capital
-        shares = 0  # 持有股数
-        
-        # 遍历数据进行交易
         for i in range(1, len(df)):
-            # MACD金叉：买入信号
-            if df['hist'].iloc[i-1] < 0 and df['hist'].iloc[i] > 0:
-                # 计算可买入股数
-                available_amount = capital * self.position_size
-                new_shares = int(available_amount / df['close'].iloc[i])
-                if new_shares > 0:
-                    shares += new_shares
-                    capital -= new_shares * df['close'].iloc[i]
+            if df['macd_hist'].iloc[i] > 0 and df['macd_hist'].iloc[i-1] <= 0:
+                # 金叉买入信号
+                if position == 0:
+                    price = df['close'].iloc[i]
+                    position = 1
+                    trade_amount = self.capital * POSITION_SIZE
+                    shares = int(trade_amount / price)
+                    fee = max(trade_amount * TRADE_FEE, MIN_FEE)
+                    self.capital -= (shares * price + fee)
+                    self.trades.append({
+                        'date': df['trade_date'].iloc[i],
+                        'type': 'buy',
+                        'price': price,
+                        'shares': shares,
+                        'fee': fee
+                    })
+                    
+            elif df['macd_hist'].iloc[i] < 0 and df['macd_hist'].iloc[i-1] >= 0:
+                # 死叉卖出信号
+                if position == 1:
+                    price = df['close'].iloc[i]
+                    position = 0
+                    shares = self.trades[-1]['shares']
+                    trade_amount = shares * price
+                    fee = max(trade_amount * TRADE_FEE, MIN_FEE)
+                    stamp_duty = trade_amount * STAMP_DUTY
+                    self.capital += (trade_amount - fee - stamp_duty)
+                    self.trades.append({
+                        'date': df['trade_date'].iloc[i],
+                        'type': 'sell',
+                        'price': price,
+                        'shares': shares,
+                        'fee': fee + stamp_duty
+                    })
+    
+    def show_results(self):
+        if not self.trades:
+            print("没有产生任何交易")
+            return
             
-            # MACD死叉：卖出信号
-            elif df['hist'].iloc[i-1] > 0 and df['hist'].iloc[i] < 0:
-                if shares > 0:
-                    # 卖出所有持仓
-                    capital += shares * df['close'].iloc[i]
-                    shares = 0
-            
-            # 记录每日持仓市值
-            positions.append({
-                'date': df['trade_date'].iloc[i],
-                'close': df['close'].iloc[i],
-                'shares': shares,
-                'capital': capital,
-                'total_value': capital + shares * df['close'].iloc[i]
-            })
+        df = pd.DataFrame(self.trades)
+        total_trades = len(df)
+        profit = self.capital - INITIAL_CAPITAL
+        profit_rate = profit / INITIAL_CAPITAL * 100
         
-        return pd.DataFrame(positions)
-
-    def calculate_metrics(self, positions_df):
-        """计算回测指标"""
-        initial_value = self.initial_capital
-        final_value = positions_df['total_value'].iloc[-1]
+        print(f"回测结果:")
+        print(f"总交易次数: {total_trades}")
+        print(f"最终资金: {self.capital:.2f}")
+        print(f"总收益: {profit:.2f}")
+        print(f"收益率: {profit_rate:.2f}%")
         
-        total_return = (final_value - initial_value) / initial_value * 100
-        
-        return {
-            '初始资金': initial_value,
-            '最终市值': final_value,
-            '总收益率': f'{total_return:.2f}%'
-        } 
+        if SAVE_TRADES:
+            df.to_csv('trades.csv', index=False)
+            print("交易记录已保存到trades.csv") 
